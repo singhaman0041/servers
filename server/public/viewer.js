@@ -14,11 +14,11 @@ let pc = null;
 let pendingIce = [];
 
 ws.onopen = () => {
-  console.log("Viewer connected to signaling server");
+  console.log("Viewer connected");
 
   ws.send(JSON.stringify({
     type: "viewer",
-    room
+    room: room
   }));
 };
 
@@ -28,29 +28,35 @@ ws.onmessage = async (e) => {
 
     console.log("SIGNAL:", m);
 
+    // -------------------------
     // HOST OFFER
+    // -------------------------
     if (m.type === "offer") {
 
       if (pc) {
         pc.close();
+        pc = null;
       }
 
       pc = new RTCPeerConnection({
         iceServers: [
-          { urls: "stun:stun.l.google.com:19302" }
+          {
+            urls: "stun:stun.l.google.com:19302"
+          }
         ]
       });
 
-      // Receive video + audio
+      // Receive audio + video
       pc.ontrack = async (event) => {
 
-        console.log("REMOTE TRACK:", event.track.kind);
+        console.log("TRACK RECEIVED:", event.track.kind);
 
         if (event.streams && event.streams[0]) {
           video.srcObject = event.streams[0];
         }
 
         state.textContent = "LIVE";
+
         state.className =
           "ml-auto px-3 py-1 rounded-full bg-emerald-500/15 text-xs text-emerald-300";
 
@@ -60,51 +66,56 @@ ws.onmessage = async (e) => {
           await video.play();
         } catch (err) {
           console.log("Autoplay blocked:", err);
-          msg.textContent = "Click video to start playback";
+          msg.textContent = "Click the video to start";
         }
       };
 
-      // Send ICE candidate to HOST
+      // Send viewer ICE to HOST
       pc.onicecandidate = (event) => {
 
-        if (event.candidate) {
+        if (!event.candidate) return;
 
-          ws.send(JSON.stringify({
-            type: "ice",
-            room,
-            target: "host",
-            candidate: event.candidate
-          }));
-
-        }
+        ws.send(JSON.stringify({
+          type: "ice",
+          room: room,
+          target: "host",
+          candidate: event.candidate
+        }));
       };
 
       pc.onconnectionstatechange = () => {
 
         console.log(
-          "WebRTC state:",
+          "Connection state:",
           pc.connectionState
         );
 
         if (pc.connectionState === "connected") {
           state.textContent = "LIVE";
+          msg.textContent = "Live stream connected";
         }
 
-        if (pc.connectionState === "failed") {
-          state.textContent = "CONNECTION FAILED";
-          msg.textContent = "WebRTC connection failed";
+        if (pc.connectionState === "connecting") {
+          state.textContent = "CONNECTING";
         }
 
         if (pc.connectionState === "disconnected") {
           state.textContent = "DISCONNECTED";
+          msg.textContent = "Connection interrupted";
+        }
+
+        if (pc.connectionState === "failed") {
+          state.textContent = "FAILED";
+          msg.textContent = "WebRTC connection failed";
         }
       };
 
-      // Set HOST offer
+      // Set offer received from HOST
       await pc.setRemoteDescription(m.offer);
 
-      // Add ICE candidates that arrived early
+      // Add ICE candidates received before offer
       for (const candidate of pendingIce) {
+
         try {
           await pc.addIceCandidate(candidate);
         } catch (err) {
@@ -114,46 +125,58 @@ ws.onmessage = async (e) => {
 
       pendingIce = [];
 
-      // Create answer
+      // Create ANSWER
       const answer = await pc.createAnswer();
 
       await pc.setLocalDescription(answer);
 
-      // IMPORTANT:
-      // Answer goes back to HOST
+      // Send ANSWER back to HOST
       ws.send(JSON.stringify({
         type: "answer",
-        room,
+        room: room,
         target: "host",
         answer: pc.localDescription
       }));
     }
 
+    // -------------------------
     // ICE FROM HOST
+    // -------------------------
     if (m.type === "ice") {
 
       if (!pc || !pc.remoteDescription) {
+
         pendingIce.push(m.candidate);
+
       } else {
+
         try {
           await pc.addIceCandidate(m.candidate);
         } catch (err) {
           console.log("ICE error:", err);
         }
+
       }
     }
 
-    // ERROR
+    // -------------------------
+    // SERVER ERROR
+    // -------------------------
     if (m.type === "error") {
-      msg.textContent = m.message;
+
+      console.log("Server error:", m.message);
+
       state.textContent = "OFFLINE";
+      msg.textContent = m.message;
     }
 
+    // -------------------------
     // STREAM ENDED
+    // -------------------------
     if (m.type === "ended") {
 
-      msg.textContent = "Host stopped the stream.";
       state.textContent = "ENDED";
+      msg.textContent = "Host stopped the stream.";
 
       if (pc) {
         pc.close();
@@ -164,15 +187,20 @@ ws.onmessage = async (e) => {
     }
 
   } catch (err) {
-    console.error("Viewer message error:", err);
+
+    console.error(
+      "Viewer message error:",
+      err
+    );
+
   }
 };
 
-
-// If browser blocks autoplay,
-// clicking video will start it.
+// Manual playback if autoplay is blocked
 video.addEventListener("click", () => {
+
   video.play().catch(err => {
     console.log("Play error:", err);
   });
+
 });

@@ -52,69 +52,50 @@ ws.onmessage = async (e) => {
       });
 
       // -------- REMOTE TRACK --------
-      pc.ontrack = async (event) => {
+      pc.ontrack = (event) => {
+        console.log("REMOTE TRACK RECEIVED:", event.track.kind);
 
-        console.log("REMOTE TRACK:", event.track.kind);
-
-        let stream;
-
-        if (event.streams && event.streams.length > 0) {
-          stream = event.streams[0];
+        if (event.streams && event.streams[0]) {
+          video.srcObject = event.streams[0];
         } else {
-          stream = new MediaStream([event.track]);
+          if (!video.srcObject) {
+            video.srcObject = new MediaStream();
+          }
+          video.srcObject.addTrack(event.track);
         }
 
-        video.srcObject = stream;
-
-        // Force video settings
         video.autoplay = true;
         video.playsInline = true;
-        video.controls = true;
-        video.muted = true;
-
-        console.log(
-          "Video tracks:",
-          stream.getVideoTracks().length
-        );
-
-        console.log(
-          "Audio tracks:",
-          stream.getAudioTracks().length
-        );
 
         setLive();
 
-        try {
-          await video.play();
-          console.log("VIDEO PLAYING");
-        } catch (err) {
-          console.log("Autoplay blocked:", err);
-          msg.textContent = "Click the video to play";
-        }
+        video.play().then(() => {
+          console.log("VIDEO PLAYING SUCCESSFULLY");
+        }).catch((err) => {
+          console.log("Autoplay blocked, falling back to muted play:", err);
+          video.muted = true;
+          video.play().catch(e => {
+            console.error("Play error:", e);
+            msg.textContent = "Click the video to play audio/video";
+          });
+        });
       };
 
       // -------- ICE --------
       pc.onicecandidate = (event) => {
-
         if (event.candidate) {
-
           ws.send(JSON.stringify({
             type: "ice",
             room: room,
             target: "host",
             candidate: event.candidate
           }));
-
         }
       };
 
       // -------- CONNECTION STATE --------
       pc.onconnectionstatechange = () => {
-
-        console.log(
-          "WebRTC state:",
-          pc.connectionState
-        );
+        console.log("WebRTC state:", pc.connectionState);
 
         if (pc.connectionState === "connected") {
           console.log("WEBRTC CONNECTED");
@@ -138,20 +119,17 @@ ws.onmessage = async (e) => {
 
       // Add queued ICE
       for (const candidate of pendingIce) {
-
         try {
           await pc.addIceCandidate(candidate);
         } catch (err) {
           console.log("Queued ICE error:", err);
         }
-
       }
 
       pendingIce = [];
 
       // -------- ANSWER --------
       const answer = await pc.createAnswer();
-
       await pc.setLocalDescription(answer);
 
       ws.send(JSON.stringify({
@@ -166,36 +144,27 @@ ws.onmessage = async (e) => {
 
     // ---------------- ICE ----------------
     if (m.type === "ice") {
-
       if (!pc || !pc.remoteDescription) {
-
         console.log("ICE QUEUED");
-
         pendingIce.push(m.candidate);
-
       } else {
-
         try {
           await pc.addIceCandidate(m.candidate);
         } catch (err) {
           console.log("ICE error:", err);
         }
-
       }
     }
 
     // ---------------- ERROR ----------------
     if (m.type === "error") {
-
       console.log("SERVER ERROR:", m.message);
-
       msg.textContent = m.message;
       state.textContent = "OFFLINE";
     }
 
     // ---------------- END ----------------
     if (m.type === "ended") {
-
       msg.textContent = "Host stopped the stream.";
       state.textContent = "ENDED";
 
@@ -208,31 +177,17 @@ ws.onmessage = async (e) => {
     }
 
   } catch (err) {
-
-    console.error(
-      "Viewer message error:",
-      err
-    );
-
+    console.error("Viewer message error:", err);
   }
 };
 
-
-// Manual click play
+// Manual click play fallback
 video.addEventListener("click", async () => {
-
   try {
-
     video.muted = false;
-
     await video.play();
-
     console.log("VIDEO PLAYING AFTER CLICK");
-
   } catch (err) {
-
     console.error("Play error:", err);
-
   }
-
 });

@@ -13,8 +13,15 @@ const ws = new WebSocket(
 let pc = null;
 let pendingIce = [];
 
+function setLive() {
+  state.textContent = "LIVE";
+  state.className =
+    "ml-auto px-3 py-1 rounded-full bg-emerald-500/15 text-xs text-emerald-300";
+  msg.textContent = "Live stream connected";
+}
+
 ws.onopen = () => {
-  console.log("Viewer connected");
+  console.log("Viewer connected to signaling server");
 
   ws.send(JSON.stringify({
     type: "viewer",
@@ -26,12 +33,12 @@ ws.onmessage = async (e) => {
   try {
     const m = JSON.parse(e.data);
 
-    console.log("SIGNAL:", m);
+    console.log("SIGNAL:", m.type);
 
-    // -------------------------
-    // HOST OFFER
-    // -------------------------
+    // ---------------- OFFER ----------------
     if (m.type === "offer") {
+
+      console.log("OFFER RECEIVED");
 
       if (pc) {
         pc.close();
@@ -40,80 +47,96 @@ ws.onmessage = async (e) => {
 
       pc = new RTCPeerConnection({
         iceServers: [
-          {
-            urls: "stun:stun.l.google.com:19302"
-          }
+          { urls: "stun:stun.l.google.com:19302" }
         ]
       });
 
-      // Receive audio + video
+      // -------- REMOTE TRACK --------
       pc.ontrack = async (event) => {
 
-        console.log("TRACK RECEIVED:", event.track.kind);
+        console.log("REMOTE TRACK:", event.track.kind);
 
-        if (event.streams && event.streams[0]) {
-          video.srcObject = event.streams[0];
+        let stream;
+
+        if (event.streams && event.streams.length > 0) {
+          stream = event.streams[0];
+        } else {
+          stream = new MediaStream([event.track]);
         }
 
-        state.textContent = "LIVE";
+        video.srcObject = stream;
 
-        state.className =
-          "ml-auto px-3 py-1 rounded-full bg-emerald-500/15 text-xs text-emerald-300";
+        // Force video settings
+        video.autoplay = true;
+        video.playsInline = true;
+        video.controls = true;
+        video.muted = true;
 
-        msg.textContent = "Live stream connected";
+        console.log(
+          "Video tracks:",
+          stream.getVideoTracks().length
+        );
+
+        console.log(
+          "Audio tracks:",
+          stream.getAudioTracks().length
+        );
+
+        setLive();
 
         try {
           await video.play();
+          console.log("VIDEO PLAYING");
         } catch (err) {
           console.log("Autoplay blocked:", err);
-          msg.textContent = "Click the video to start";
+          msg.textContent = "Click the video to play";
         }
       };
 
-      // Send viewer ICE to HOST
+      // -------- ICE --------
       pc.onicecandidate = (event) => {
 
-        if (!event.candidate) return;
+        if (event.candidate) {
 
-        ws.send(JSON.stringify({
-          type: "ice",
-          room: room,
-          target: "host",
-          candidate: event.candidate
-        }));
+          ws.send(JSON.stringify({
+            type: "ice",
+            room: room,
+            target: "host",
+            candidate: event.candidate
+          }));
+
+        }
       };
 
+      // -------- CONNECTION STATE --------
       pc.onconnectionstatechange = () => {
 
         console.log(
-          "Connection state:",
+          "WebRTC state:",
           pc.connectionState
         );
 
         if (pc.connectionState === "connected") {
-          state.textContent = "LIVE";
-          msg.textContent = "Live stream connected";
+          console.log("WEBRTC CONNECTED");
+          setLive();
         }
 
-        if (pc.connectionState === "connecting") {
-          state.textContent = "CONNECTING";
+        if (pc.connectionState === "failed") {
+          state.textContent = "CONNECTION FAILED";
+          msg.textContent = "WebRTC connection failed";
         }
 
         if (pc.connectionState === "disconnected") {
           state.textContent = "DISCONNECTED";
-          msg.textContent = "Connection interrupted";
-        }
-
-        if (pc.connectionState === "failed") {
-          state.textContent = "FAILED";
-          msg.textContent = "WebRTC connection failed";
         }
       };
 
-      // Set offer received from HOST
+      // -------- REMOTE DESCRIPTION --------
       await pc.setRemoteDescription(m.offer);
 
-      // Add ICE candidates received before offer
+      console.log("Remote description set");
+
+      // Add queued ICE
       for (const candidate of pendingIce) {
 
         try {
@@ -121,30 +144,32 @@ ws.onmessage = async (e) => {
         } catch (err) {
           console.log("Queued ICE error:", err);
         }
+
       }
 
       pendingIce = [];
 
-      // Create ANSWER
+      // -------- ANSWER --------
       const answer = await pc.createAnswer();
 
       await pc.setLocalDescription(answer);
 
-      // Send ANSWER back to HOST
       ws.send(JSON.stringify({
         type: "answer",
         room: room,
         target: "host",
         answer: pc.localDescription
       }));
+
+      console.log("ANSWER SENT");
     }
 
-    // -------------------------
-    // ICE FROM HOST
-    // -------------------------
+    // ---------------- ICE ----------------
     if (m.type === "ice") {
 
       if (!pc || !pc.remoteDescription) {
+
+        console.log("ICE QUEUED");
 
         pendingIce.push(m.candidate);
 
@@ -159,24 +184,20 @@ ws.onmessage = async (e) => {
       }
     }
 
-    // -------------------------
-    // SERVER ERROR
-    // -------------------------
+    // ---------------- ERROR ----------------
     if (m.type === "error") {
 
-      console.log("Server error:", m.message);
+      console.log("SERVER ERROR:", m.message);
 
-      state.textContent = "OFFLINE";
       msg.textContent = m.message;
+      state.textContent = "OFFLINE";
     }
 
-    // -------------------------
-    // STREAM ENDED
-    // -------------------------
+    // ---------------- END ----------------
     if (m.type === "ended") {
 
-      state.textContent = "ENDED";
       msg.textContent = "Host stopped the stream.";
+      state.textContent = "ENDED";
 
       if (pc) {
         pc.close();
@@ -196,11 +217,22 @@ ws.onmessage = async (e) => {
   }
 };
 
-// Manual playback if autoplay is blocked
-video.addEventListener("click", () => {
 
-  video.play().catch(err => {
-    console.log("Play error:", err);
-  });
+// Manual click play
+video.addEventListener("click", async () => {
+
+  try {
+
+    video.muted = false;
+
+    await video.play();
+
+    console.log("VIDEO PLAYING AFTER CLICK");
+
+  } catch (err) {
+
+    console.error("Play error:", err);
+
+  }
 
 });

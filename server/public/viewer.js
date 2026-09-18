@@ -8,8 +8,6 @@ const ICE_SERVERS = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
   { urls: "stun:stun2.l.google.com:19302" },
-  { urls: "stun:stun3.l.google.com:19302" },
-  { urls: "stun:stun4.l.google.com:19302" },
   {
     urls: "turn:openrelay.metered.ca:80",
     username: "openrelay",
@@ -17,11 +15,6 @@ const ICE_SERVERS = [
   },
   {
     urls: "turn:openrelay.metered.ca:443",
-    username: "openrelay",
-    credential: "openrelay"
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443?transport=tcp",
     username: "openrelay",
     credential: "openrelay"
   }
@@ -39,7 +32,7 @@ let pendingIce = [];
 function setLive() {
   state.textContent = "LIVE";
   state.className = "ml-auto px-3 py-1 rounded-full bg-emerald-500/15 text-xs text-emerald-300";
-  msg.textContent = "Live stream connected";
+  msg.textContent = "Click on the video if sound is muted";
 }
 
 ws.onopen = () => {
@@ -62,21 +55,13 @@ ws.onmessage = async (e) => {
       pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
       pc.ontrack = (event) => {
-        if (event.streams && event.streams[0]) {
-          video.srcObject = event.streams[0];
-        } else {
-          if (!video.srcObject) {
-            video.srcObject = new MediaStream();
-          }
-          video.srcObject.addTrack(event.track);
-        }
-
+        console.log("Track received:", event.track.kind);
+        
+        video.srcObject = event.streams[0];
+        video.muted = true; // Mute initially to bypass browser autoplay blocks
+        video.play();
+        
         setLive();
-
-        video.play().catch(() => {
-          video.muted = true;
-          video.play().catch(console.error);
-        });
       };
 
       pc.onicecandidate = (event) => {
@@ -87,19 +72,6 @@ ws.onmessage = async (e) => {
             target: "host",
             candidate: event.candidate
           }));
-        }
-      };
-
-      pc.onconnectionstatechange = () => {
-        console.log("WebRTC state:", pc.connectionState);
-
-        if (pc.connectionState === "connected") {
-          setLive();
-        }
-
-        if (pc.connectionState === "failed") {
-          state.textContent = "FAILED";
-          msg.textContent = "Connection failed. Retrying...";
         }
       };
 
@@ -145,9 +117,8 @@ ws.onmessage = async (e) => {
   }
 };
 
-video.addEventListener("click", async () => {
+// Click to enable audio fallback
+video.addEventListener("click", () => {
   video.muted = false;
-  try {
-    await video.play();
-  } catch (e) {}
+  video.play();
 });
